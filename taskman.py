@@ -8,12 +8,12 @@ from os.path import expandvars
 homedir = expandvars('$HOME')
 
 
-def submit(template, args_str, task_name):
+def submit(template_file, args_str, task_name):
     # Generate id
     task_id = time.strftime("%Y-%m-%d_%H-%M-%S")
 
     # Get template
-    with open(homedir + '/script_moab/' + template + '.sh', 'r') as f:
+    with open(homedir + '/script_moab/' + template_file + '.sh', 'r') as f:
         template = f.readlines()
 
     # Append post exec bash script
@@ -43,12 +43,12 @@ def submit(template, args_str, task_name):
         output = subprocess.check_output(['msub', script_file], stderr=subprocess.STDOUT, timeout=20)
 
         # Get moab job id
-        moab_id = output.strip()
+        moab_id = output.decode('UTF-8').strip()
 
         # Add to 'started' database
         with open(homedir + '/taskman/started', 'a') as f:
-            line = '{},{},{},{},{}'.format(task_id, task_name, moab_id, template, args_str)
-            f.writelines([line])
+            line = '{},{},{},{},{}'.format(task_id, task_name, moab_id, template_file, args_str)
+            f.write(line + '\n')
 
         print('Submitted!  TaskmanID: {}  MoabID: {}'.format(task_id, moab_id))
     except subprocess.CalledProcessError as e:
