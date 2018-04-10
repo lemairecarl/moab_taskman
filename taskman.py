@@ -8,33 +8,45 @@ from os.path import expandvars
 homedir = expandvars('$HOME')
 
 
-def submit(template_file, args_str, task_name):
+def _submit(template_file, args_str, task_name, continue_id=None):
     # Generate id
-    task_id = time.strftime("%Y-%m-%d_%H-%M-%S")
+    new_script = True
+    if continue_id is None:
+        task_id = time.strftime("%Y-%m-%d_%H-%M-%S")
+    else:
+        task_id = continue_id
+        new_script = False
 
-    # Get template
-    with open(homedir + '/script_moab/' + template_file + '.sh', 'r') as f:
-        template = f.readlines()
-
-    # Append post exec bash script
-    with open(homedir + '/script_moab/taskman_post_exec.sh', 'r') as f:
-        post_exec = f.readlines()
-    template += post_exec
-
-    # Replace variables
-    script_lines = []
-    for line in template:
-        line = line.replace('$TASKMAN_NAME', task_name)
-        line = line.replace('$TASKMAN_ID', task_id)
-        line = line.replace('$TASKMAN_ARGS', args_str)
-        script_lines.append(line)
-
-    # Write script
     script_path = homedir + '/script_moab/taskman/' + task_name
-    makedirs(script_path, exist_ok=True)
     script_file = script_path + '/' + task_id + '.sh'
-    with open(script_file, 'w') as f:
-        f.writelines(script_lines)
+
+    # Create script if new task
+    if new_script:
+        # Get template
+        with open(homedir + '/script_moab/' + template_file + '.sh', 'r') as f:
+            template = f.readlines()
+
+        # Append post exec bash script
+        with open(homedir + '/script_moab/taskman_post_exec.sh', 'r') as f:
+            post_exec = f.readlines()
+        template += post_exec
+
+        # Replace variables
+        script_lines = []
+        for line in template:
+            line = line.replace('$TASKMAN_NAME', task_name)
+            line = line.replace('$TASKMAN_ID', task_id)
+            line = line.replace('$TASKMAN_ARGS', args_str)
+            script_lines.append(line)
+
+        # Write script
+        makedirs(script_path, exist_ok=True)
+        with open(script_file, 'w') as f:
+            f.writelines(script_lines)
+
+        print('Created', script_file)
+    else:
+        print('Continue using', script_file)
 
     # Submit using msub
     output = ""
@@ -47,7 +59,7 @@ def submit(template_file, args_str, task_name):
 
         # Add to 'started' database
         with open(homedir + '/taskman/started', 'a') as f:
-            line = '{},{},{},{},{}'.format(task_id, task_name, moab_id, template_file, args_str)
+            line = '{},{},{},{},{}'.format(task_id, task_name, moab_id, script_file, args_str)
             f.write(line + '\n')
 
         print('Submitted!  TaskmanID: {}  MoabID: {}'.format(task_id, moab_id))
@@ -61,7 +73,15 @@ def submit(template_file, args_str, task_name):
     print('====')
 
 
-cmds = {'sub': submit}
+def submit(template_file, args_str, task_name):
+    _submit(template_file, args_str, task_name)
+
+
+def continu(template_file, args_str, task_name, taskman_id):
+    _submit(template_file, args_str, task_name, continue_id=taskman_id)
+
+
+cmds = {'sub': submit, 'cont': continu}
 
 
 def handle_command(cmd_str):
