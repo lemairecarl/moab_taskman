@@ -88,7 +88,7 @@ def handle_command(cmd_str):
     tokens = cmd_str.split(' ')
     cmd_name = tokens[0]
     cmd_args = ' '.join(tokens[1:])
-    cmds[cmd_name](*cmd_args.split(','))
+    cmds[cmd_name](*cmd_args.split(';'))
 
 
 def show_commands():
@@ -96,7 +96,7 @@ def show_commands():
     for name, fn in cmds.items():
         sig = inspect.signature(fn)
         params = list(sig.parameters.values())
-        print(name, ':', ', '.join([str(p) for p in params]))
+        print(name, ':', '; '.join([str(p) for p in params]))
 
 
 while True:
