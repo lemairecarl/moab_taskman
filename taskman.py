@@ -1,6 +1,8 @@
+import json
 import subprocess
 import inspect
 import time
+from datetime import datetime
 from enum import Enum
 from os import makedirs
 from os.path import expandvars
@@ -37,7 +39,7 @@ class Job(object):
         self.status = status
         self.template_file = template_file
         self.args_str = args_str
-        self.report = None
+        self.report = {}
 
     @property
     def script_file(self):
@@ -53,6 +55,7 @@ class Job(object):
 
 class Taskman(object):
     jobs = {}
+    columns = set()
 
     @staticmethod
     def get_cmd_output(args, timeout=20):
@@ -96,7 +99,7 @@ class Taskman(object):
     @staticmethod
     def create_task(template_file, args_str, task_name):
         # Generate id
-        task_id = time.strftime("%Y-%m-%d_%H-%M-%S")
+        task_id = datetime.now().strftime("%m-%d_%H-%M-%S_%f")
         script_path, script_file = Job.get_path(task_name, task_id)
 
         # Get template
@@ -157,23 +160,6 @@ class Taskman(object):
         print(output.strip())
 
     @staticmethod
-    def handle_command(cmd_str):
-        tokens = cmd_str.split(' ')
-        cmd_name = tokens[0]
-        if cmd_name == '':
-            return
-        cmd_args = ' '.join(tokens[1:])
-        cmds[cmd_name](*cmd_args.split(';'))
-
-    @staticmethod
-    def show_commands():
-        print('Available commands:')
-        for name, fn in cmds.items():
-            sig = inspect.signature(fn)
-            params = list(sig.parameters.values())
-            print(name, ':', '; '.join([str(p) for p in params]))
-
-    @staticmethod
     def update_job_list():
         active_jobs, eligible_jobs, blocked_jobs = Taskman.get_moab_queue()
 
@@ -208,18 +194,66 @@ class Taskman(object):
 
             jobs[task_id] = Job(task_id, name, moab_id, status, template_file, args_str)
         Taskman.jobs = jobs
+        Taskman.update_report()
+
+    @staticmethod
+    def update_report():
+        Taskman.columns = set()
+        for task_id, job in Taskman.jobs.items():
+            output_filepath = homedir + '/logs/' + job.name + '.o' + job.moab_id
+            report_line = None
+            try:
+                with open(output_filepath, 'r') as f:
+                    for line in f:
+                        if line[:8] == '!taskman':
+                            report_line = line
+            except FileNotFoundError:
+                pass
+            if report_line is not None:
+                job.report = json.loads(report_line[8:])
+                Taskman.columns.update(job.report.keys())
+        if 'time' in Taskman.columns:
+            Taskman.columns.remove('time')
 
     @staticmethod
     def show_status():
         print('\033[2J\033[H')  # Clear screen and move cursor to top left
         print('\033[97;45m( Moab Task Manager )\033[0m     ' + time.strftime("%H:%M:%S"), end='')
         print('     \033[37mCtrl+C to enter command mode\033[0m')
-        print('\033[1m{:<8} {:<30} {:<19} {}\033[0m'.format('Status', 'Task name', 'Task id', 'Moab id'))
+
+        line_fmt = '{:<8} {:<30} {:<19} {:<7} {:<8}' + ' {:<12}' * len(Taskman.columns)
+        print('\033[1m' + line_fmt.format('Status', 'Task name', 'Task id', 'Moab id', 'Secs ago',
+                                          *Taskman.columns) + '\033[0m')
         for task_id, job in sorted(Taskman.jobs.items(), key=lambda x: x[1].name):
-            status_line = '{:<8} {:<30} {:<19} {}'.format(job.status, job.name, task_id, job.moab_id)
+            # Get report data
+            report_columns = []
+            for k in sorted(Taskman.columns):
+                val_str = str(job.report.get(k, ''))[:12]
+                report_columns.append(val_str)
+            secs_ago = int(time.time() - job.report['time']) if 'time' in job.report else ''
+            # Format line
+            status_line = line_fmt.format(job.status, job.name, task_id, job.moab_id, secs_ago, *report_columns)
             if job.status.needs_attention:
                 status_line = '\033[31m' + status_line + '\033[0m'
             print(status_line)
+
+
+def _handle_command(cmd_str):
+    tokens = cmd_str.split(' ')
+    cmd_name = tokens[0]
+    if cmd_name == '':
+        return
+    cmd_args = ' '.join(tokens[1:])
+    cmds[cmd_name](*cmd_args.split(';'))
+
+
+def _show_commands():
+    print('-------------------')
+    print('Available commands:')
+    for name, fn in cmds.items():
+        sig = inspect.signature(fn)
+        params = list(sig.parameters.values())
+        print(name, ':', '; '.join([str(p) for p in params]))
 
 
 def _match(pattern, name):
@@ -247,7 +281,7 @@ def cancel(task_name):
 def copy(task_name):
     for task_id, job in Taskman.jobs.items():
         if _match(task_name, job.name):
-            job = Taskman.create_task(job.template_file, job.args_str, task_name)
+            job = Taskman.create_task(job.template_file, job.args_str, job.name)
             Taskman.submit(job)
 
 
@@ -268,6 +302,6 @@ if __name__ == '__main__':
 
         if command_mode:
             print()
-            taskman.show_commands()
+            _show_commands()
             command = input('\033[1mCommand>>\033[0m ')
-            taskman.handle_command(command)
+            _handle_command(command)
