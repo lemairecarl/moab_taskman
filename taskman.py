@@ -10,6 +10,13 @@ from os.path import expandvars
 homedir = expandvars('$HOME')
 
 
+def fmt_time(seconds):
+    if seconds < 60:
+        return str(round(seconds)) + 's'
+    else:
+        return str(round(seconds / 60)) + 'm'
+
+
 class JobStatus(Enum):
     Dead = 'Dead'
     Finished = 'Finished'
@@ -221,18 +228,18 @@ class Taskman(object):
         print('\033[97;45m( Moab Task Manager )\033[0m     ' + time.strftime("%H:%M:%S"), end='')
         print('     \033[37mCtrl+C to enter command mode\033[0m')
 
-        line_fmt = '{:<8} {:<30} {:<19} {:<7} {:<8}' + ' {:<12}' * len(Taskman.columns)
-        print('\033[1m' + line_fmt.format('Status', 'Task name', 'Task id', 'Moab id', 'Secs ago',
-                                          *Taskman.columns) + '\033[0m')
+        line_fmt = '{:<8} {:<30} {:<19} {:<7} {:<7}' + ' {:<12}' * len(Taskman.columns)
+        print('\033[1m' + line_fmt.format('Status', 'Task name', 'Task id', 'Moab id', 'Updated',
+                                          *sorted(Taskman.columns)) + '\033[0m')
         for task_id, job in sorted(Taskman.jobs.items(), key=lambda x: x[1].name):
             # Get report data
             report_columns = []
             for k in sorted(Taskman.columns):
                 val_str = str(job.report.get(k, ''))[:12]
                 report_columns.append(val_str)
-            secs_ago = int(time.time() - job.report['time']) if 'time' in job.report else ''
+            time_ago = fmt_time(time.time() - job.report['time']) if 'time' in job.report else ''
             # Format line
-            status_line = line_fmt.format(job.status, job.name, task_id, job.moab_id, secs_ago, *report_columns)
+            status_line = line_fmt.format(job.status, job.name, task_id, job.moab_id, time_ago, *report_columns)
             if job.status.needs_attention:
                 status_line = '\033[31m' + status_line + '\033[0m'
             print(status_line)
