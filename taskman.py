@@ -1,39 +1,81 @@
 import subprocess
 import inspect
 import time
+from enum import Enum
 from os import makedirs
 from os.path import expandvars
 
 homedir = expandvars('$HOME')
 
 
+class JobStatus(Enum):
+    Dead = 'Dead'
+    Finished = 'Finished'
+    Unknown = '?'
+    Running = 'Running'
+    Waiting = 'Waiting'
+    Blocked = 'Blocked'
+    Lost = 'Lost'
+
+    def __str__(self):
+        return self.value
+
+    @property
+    def cancellable(self):
+        return self in [JobStatus.Running, JobStatus.Waiting, JobStatus.Blocked]
+
+    @property
+    def needs_attention(self):
+        return self in [JobStatus.Dead, JobStatus.Lost]
+
+
 class Job(object):
-    def __init__(self, task_id, name, moab_id, status, script_file, args_str):
+    def __init__(self, task_id, name, moab_id, status, template_file, args_str):
         self.task_id = task_id
         self.moab_id = moab_id
         self.name = name
         self.status = status
-        self.script_file = script_file
+        self.template_file = template_file
         self.args_str = args_str
         self.report = None
+
+    @property
+    def script_file(self):
+        _, script_file = Job.get_path(self.name, self.task_id)
+        return script_file
+
+    @staticmethod
+    def get_path(task_name, task_id):
+        script_path = homedir + '/script_moab/taskman/' + task_name
+        script_file = script_path + '/' + task_id + '.sh'
+        return script_path, script_file
 
 
 class Taskman(object):
     jobs = {}
 
     @staticmethod
-    def get_moab_queue():
-        args = ['showq', '-w', expandvars('user=$USER'), '--blocking']
+    def get_cmd_output(args, timeout=20):
         try:
-            output = subprocess.check_output(args, stderr=subprocess.STDOUT, timeout=10)
+            output = subprocess.check_output(args, stderr=subprocess.STDOUT, timeout=timeout)
         except subprocess.CalledProcessError as e:
-            print('Error with showq')
+            print('Error with command: ' + ' '.join(args))
             print(e.output)
             raise
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
+            print('Timeout with command: ' + ' '.join(args))
+            print(e.output)
+            return None
+        return output.decode('UTF-8')
+
+    @staticmethod
+    def get_moab_queue():
+        args = ['showq', '-w', expandvars('user=$USER'), '--blocking']
+        output = Taskman.get_cmd_output(args, timeout=10)
+        if output is None:
             return None, None, None
 
-        showq_lines = output.decode('UTF-8').split('\n')
+        showq_lines = output.split('\n')
         showq_lines = [l.strip() for l in showq_lines]
         lists = {'active j': [], 'eligible': [], 'blocked ': []}
         cur_list = None
@@ -55,8 +97,7 @@ class Taskman(object):
     def create_task(template_file, args_str, task_name):
         # Generate id
         task_id = time.strftime("%Y-%m-%d_%H-%M-%S")
-        script_path = homedir + '/script_moab/taskman/' + task_name
-        script_file = script_path + '/' + task_id + '.sh'
+        script_path, script_file = Job.get_path(task_name, task_id)
 
         # Get template
         with open(homedir + '/script_moab/' + template_file + '.sh', 'r') as f:
@@ -81,31 +122,39 @@ class Taskman(object):
             f.writelines(script_lines)
 
         print('Created', script_file)
-        return Job(task_name, None, None, script_file, args_str)
+        return Job(task_id, task_name, None, None, template_file, args_str)
 
     @staticmethod
     def submit(job):
         # Submit using msub
-        try:
-            print('Calling msub...')
-            output = subprocess.check_output(['msub', job.script_file], stderr=subprocess.STDOUT, timeout=20)
+        print('Calling msub...', end=' ')
+        output = Taskman.get_cmd_output(['msub', job.script_file])
+        if output is None:
+            return
 
-            # Get moab job id
-            moab_id = output.decode('UTF-8').strip()
+        # Get moab job id
+        moab_id = output.strip()
 
-            # Add to 'started' database
-            with open(homedir + '/taskman/started', 'a') as f:
-                line = '{};{};{};{};{}'.format(job.task_id, job.name, moab_id, job.script_file, job.args_str)
-                f.write(line + '\n')
+        # Add to 'started' database
+        with open(homedir + '/taskman/started', 'a') as f:
+            line = '{};{};{};{};{}'.format(job.task_id, job.name, moab_id, job.template_file, job.args_str)
+            f.write(line + '\n')
 
-            print('Submitted!  TaskmanID: {}  MoabID: {}'.format(job.task_id, moab_id))
-        except subprocess.CalledProcessError as e:
-            print('ERROR using msub:')
-            print(e.output)
-        except subprocess.TimeoutExpired as e:
-            print('TIMEOUT using msub:')
-            print(e.output)
-        print('====')
+        print('Submitted.  TaskmanID: {}  MoabID: {}'.format(job.task_id, moab_id))
+
+    @staticmethod
+    def cancel(task_id):
+        job = Taskman.jobs[task_id]
+        output = Taskman.get_cmd_output(['mjobctl', '-c', job.moab_id])
+        if output is None:
+            return
+
+        # Add to 'finished' database
+        with open(homedir + '/taskman/finished', 'a') as f:
+            line = '{},{},{}'.format(job.moab_id, job.name, 'cancel')
+            f.write(line + '\n')
+
+        print(output.strip())
 
     @staticmethod
     def handle_command(cmd_str):
@@ -141,23 +190,23 @@ class Taskman(object):
 
         jobs = {}
         for task_id, fields in sorted(started_tasks.items(), key=lambda x: x[1][0]):
-            name, moab_id, script_file, args_str = fields
+            name, moab_id, template_file, args_str = fields
             if moab_id in dead_tasks:
-                status = '\033[31mDead\033[0m'
+                status = JobStatus.Dead
             elif moab_id in finished_tasks:
-                status = 'Finished'
+                status = JobStatus.Finished
             elif active_jobs is None:
-                status = '?'  # showq has timed out
+                status = JobStatus.Unknown  # showq has timed out
             elif moab_id in active_jobs:
-                status = 'Running'
+                status = JobStatus.Running
             elif moab_id in eligible_jobs:
-                status = 'Waiting'
+                status = JobStatus.Waiting
             elif moab_id in blocked_jobs:
-                status = 'Blocked'
+                status = JobStatus.Blocked
             else:
-                status = '\033[31mLost\033[0m'
+                status = JobStatus.Lost
 
-            jobs[task_id] = Job(task_id, name, moab_id, status, script_file, args_str)
+            jobs[task_id] = Job(task_id, name, moab_id, status, template_file, args_str)
         Taskman.jobs = jobs
 
     @staticmethod
@@ -168,7 +217,14 @@ class Taskman(object):
         print('\033[1m{:<8} {:<30} {:<19} {}\033[0m'.format('Status', 'Task name', 'Task id', 'Moab id'))
         for task_id, job in sorted(Taskman.jobs.items(), key=lambda x: x[1].name):
             status_line = '{:<8} {:<30} {:<19} {}'.format(job.status, job.name, task_id, job.moab_id)
+            if job.status.needs_attention:
+                status_line = '\033[31m' + status_line + '\033[0m'
             print(status_line)
+
+
+def _match(pattern, name):
+    match = lambda x: x.startswith(pattern[:-1]) if pattern.endswith('*') else lambda x: x == pattern
+    return match(name)
 
 
 def submit(template_file, args_str, task_name):
@@ -177,14 +233,26 @@ def submit(template_file, args_str, task_name):
 
 
 def continu(task_name):
-    match = lambda x: x.startswith(task_name[:-1]) if task_name.endswith('*') else lambda x: x == task_name
     for task_id, job in Taskman.jobs.items():
-        if job.status == 'Finished' and match(job.name):
+        if job.status == JobStatus.Finished and _match(task_name, job.name):
+            Taskman.submit(job)
+
+
+def cancel(task_name):
+    for task_id, job in Taskman.jobs.items():
+        if job.status.cancellable and _match(task_name, job.name):
+            Taskman.cancel(task_id)
+
+
+def copy(task_name):
+    for task_id, job in Taskman.jobs.items():
+        if _match(task_name, job.name):
+            job = Taskman.create_task(job.template_file, job.args_str, task_name)
             Taskman.submit(job)
 
 
 # Available commands
-cmds = {'sub': submit, 'cont': continu}
+cmds = {'sub': submit, 'cont': continu, 'cancel': cancel, 'copy': copy}
 
 
 if __name__ == '__main__':
