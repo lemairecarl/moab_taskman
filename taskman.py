@@ -7,7 +7,20 @@ from os.path import expandvars
 homedir = expandvars('$HOME')
 
 
+class Job(object):
+    def __init__(self, task_id, name, moab_id, status, script_file, args_str):
+        self.task_id = task_id
+        self.moab_id = moab_id
+        self.name = name
+        self.status = status
+        self.script_file = script_file
+        self.args_str = args_str
+        self.report = None
+
+
 class Taskman(object):
+    jobs = {}
+
     @staticmethod
     def get_moab_queue():
         args = ['showq', '-w', expandvars('user=$USER'), '--blocking']
@@ -39,95 +52,81 @@ class Taskman(object):
         return lists['active j'], lists['eligible'], lists['blocked ']
 
     @staticmethod
-    def _submit(template_file, args_str, task_name, continue_id=None):
+    def create_task(template_file, args_str, task_name):
         # Generate id
-        new_script = True
-        if continue_id is None:
-            task_id = time.strftime("%Y-%m-%d_%H-%M-%S")
-        else:
-            task_id = continue_id
-            new_script = False
-
+        task_id = time.strftime("%Y-%m-%d_%H-%M-%S")
         script_path = homedir + '/script_moab/taskman/' + task_name
         script_file = script_path + '/' + task_id + '.sh'
 
-        # Create script if new task
-        if new_script:
-            # Get template
-            with open(homedir + '/script_moab/' + template_file + '.sh', 'r') as f:
-                template = f.readlines()
+        # Get template
+        with open(homedir + '/script_moab/' + template_file + '.sh', 'r') as f:
+            template = f.readlines()
 
-            # Append post exec bash script
-            with open(homedir + '/script_moab/taskman_post_exec.sh', 'r') as f:
-                post_exec = f.readlines()
-            template += post_exec
+        # Append post exec bash script
+        with open(homedir + '/script_moab/taskman_post_exec.sh', 'r') as f:
+            post_exec = f.readlines()
+        template += post_exec
 
-            # Replace variables
-            script_lines = []
-            for line in template:
-                line = line.replace('$TASKMAN_NAME', task_name)
-                line = line.replace('$TASKMAN_ID', task_id)
-                line = line.replace('$TASKMAN_ARGS', args_str)
-                script_lines.append(line)
+        # Replace variables
+        script_lines = []
+        for line in template:
+            line = line.replace('$TASKMAN_NAME', task_name)
+            line = line.replace('$TASKMAN_ID', task_id)
+            line = line.replace('$TASKMAN_ARGS', args_str)
+            script_lines.append(line)
 
-            # Write script
-            makedirs(script_path, exist_ok=True)
-            with open(script_file, 'w') as f:
-                f.writelines(script_lines)
+        # Write script
+        makedirs(script_path, exist_ok=True)
+        with open(script_file, 'w') as f:
+            f.writelines(script_lines)
 
-            print('Created', script_file)
-        else:
-            print('Continue using', script_file)
+        print('Created', script_file)
+        return Job(task_name, None, None, script_file, args_str)
 
+    @staticmethod
+    def submit(job):
         # Submit using msub
-        output = ""
         try:
             print('Calling msub...')
-            output = subprocess.check_output(['msub', script_file], stderr=subprocess.STDOUT, timeout=20)
+            output = subprocess.check_output(['msub', job.script_file], stderr=subprocess.STDOUT, timeout=20)
 
             # Get moab job id
             moab_id = output.decode('UTF-8').strip()
 
             # Add to 'started' database
             with open(homedir + '/taskman/started', 'a') as f:
-                line = '{};{};{};{};{}'.format(task_id, task_name, moab_id, script_file, args_str)
+                line = '{};{};{};{};{}'.format(job.task_id, job.name, moab_id, job.script_file, job.args_str)
                 f.write(line + '\n')
 
-            print('Submitted!  TaskmanID: {}  MoabID: {}'.format(task_id, moab_id))
+            print('Submitted!  TaskmanID: {}  MoabID: {}'.format(job.task_id, moab_id))
         except subprocess.CalledProcessError as e:
             print('ERROR using msub:')
             print(e.output)
         except subprocess.TimeoutExpired as e:
             print('TIMEOUT using msub:')
             print(e.output)
-
         print('====')
 
-    def submit(self, template_file, args_str, task_name):
-        self._submit(template_file, args_str, task_name)
-
-    def continu(self, template_file, args_str, task_name, taskman_id):
-        self._submit(template_file, args_str, task_name, continue_id=taskman_id)
-
-    cmds = {'sub': submit, 'cont': continu}
-
-    def handle_command(self, cmd_str):
+    @staticmethod
+    def handle_command(cmd_str):
         tokens = cmd_str.split(' ')
         cmd_name = tokens[0]
         if cmd_name == '':
             return
         cmd_args = ' '.join(tokens[1:])
-        self.cmds[cmd_name](*cmd_args.split(';'))
+        cmds[cmd_name](*cmd_args.split(';'))
 
-    def show_commands(self):
+    @staticmethod
+    def show_commands():
         print('Available commands:')
-        for name, fn in self.cmds.items():
+        for name, fn in cmds.items():
             sig = inspect.signature(fn)
             params = list(sig.parameters.values())
             print(name, ':', '; '.join([str(p) for p in params]))
 
-    def show_status(self):
-        active_jobs, eligible_jobs, blocked_jobs = self.get_moab_queue()
+    @staticmethod
+    def update_job_list():
+        active_jobs, eligible_jobs, blocked_jobs = Taskman.get_moab_queue()
 
         with open(homedir + '/taskman/started', 'r') as f:
             started_tasks_csv = f.readlines()
@@ -140,12 +139,9 @@ class Taskman(object):
         dead_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(',') for l in dead_tasks_csv]}
         finished_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(',') for l in finished_tasks_csv]}
 
-        print('\033[2J\033[H')  # Clear screen and move cursor to top left
-        print('\033[97;45m( Moab Task Manager )\033[0m     ' + time.strftime("%H:%M:%S"), end='')
-        print('     \033[37mCtrl+C to enter command mode\033[0m')
-        print('\033[1m{:<8} {:<30} {:<19} {}\033[0m'.format('Status', 'Task name', 'Task id', 'Moab id'))
+        jobs = {}
         for task_id, fields in sorted(started_tasks.items(), key=lambda x: x[1][0]):
-            moab_id = fields[1]
+            name, moab_id, script_file, args_str = fields
             if moab_id in dead_tasks:
                 status = '\033[31mDead\033[0m'
             elif moab_id in finished_tasks:
@@ -161,8 +157,34 @@ class Taskman(object):
             else:
                 status = '\033[31mLost\033[0m'
 
-            status_line = '{:<8} {:<30} {:<19} {}'.format(status, fields[0], task_id, moab_id)
+            jobs[task_id] = Job(task_id, name, moab_id, status, script_file, args_str)
+        Taskman.jobs = jobs
+
+    @staticmethod
+    def show_status():
+        print('\033[2J\033[H')  # Clear screen and move cursor to top left
+        print('\033[97;45m( Moab Task Manager )\033[0m     ' + time.strftime("%H:%M:%S"), end='')
+        print('     \033[37mCtrl+C to enter command mode\033[0m')
+        print('\033[1m{:<8} {:<30} {:<19} {}\033[0m'.format('Status', 'Task name', 'Task id', 'Moab id'))
+        for task_id, job in sorted(Taskman.jobs.items(), key=lambda x: x[1].name):
+            status_line = '{:<8} {:<30} {:<19} {}'.format(job.status, job.name, task_id, job.moab_id)
             print(status_line)
+
+
+def submit(template_file, args_str, task_name):
+    job = Taskman.create_task(template_file, args_str, task_name)
+    Taskman.submit(job)
+
+
+def continu(task_name):
+    match = lambda x: x.startswith(task_name[:-1]) if task_name.endswith('*') else lambda x: x == task_name
+    for task_id, job in Taskman.jobs.items():
+        if job.status == 'Finished' and match(job.name):
+            Taskman.submit(job)
+
+
+# Available commands
+cmds = {'sub': submit, 'cont': continu}
 
 
 if __name__ == '__main__':
@@ -170,6 +192,7 @@ if __name__ == '__main__':
     while True:
         command_mode = False
         try:
+            taskman.update_job_list()
             taskman.show_status()
             time.sleep(4)
         except KeyboardInterrupt:
