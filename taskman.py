@@ -11,10 +11,12 @@ homedir = expandvars('$HOME')
 
 
 def fmt_time(seconds):
-    if seconds < 60:
-        return str(round(seconds)) + 's'
-    else:
+    if seconds >= 3600:
+        return str(round(seconds / 3600)) + 'h'
+    elif seconds >= 60:
         return str(round(seconds / 60)) + 'm'
+    else:
+        return str(round(seconds)) + 's'
 
 
 class JobStatus(Enum):
@@ -223,12 +225,22 @@ class Taskman(object):
             Taskman.columns.remove('time')
 
     @staticmethod
+    def resume_incomplete_tasks():
+        for task_id, job in Taskman.jobs.items():
+            if job.status != JobStatus.Finished:
+                continue
+            do_resubmit = job.report.get('resubmit', False)
+            if do_resubmit:
+                Taskman.submit(job)
+        time.sleep(2)
+
+    @staticmethod
     def show_status():
         print('\033[2J\033[H')  # Clear screen and move cursor to top left
         print('\033[97;45m( Moab Task Manager )\033[0m     ' + time.strftime("%H:%M:%S"), end='')
         print('     \033[37mCtrl+C to enter command mode\033[0m')
 
-        line_fmt = '{:<8} {:<30} {:<19} {:<7} {:<7}' + ' {:<12}' * len(Taskman.columns)
+        line_fmt = '{:<8} {:<30} {:<21} {:<7} {:<7}' + ' {:<12}' * len(Taskman.columns)
         print('\033[1m' + line_fmt.format('Status', 'Task name', 'Task id', 'Moab id', 'Updated',
                                           *sorted(Taskman.columns)) + '\033[0m')
         for task_id, job in sorted(Taskman.jobs.items(), key=lambda x: x[1].name):
@@ -244,6 +256,13 @@ class Taskman(object):
                 status_line = '\033[31m' + status_line + '\033[0m'
             print(status_line)
 
+    @staticmethod
+    def update(resume_incomplete_tasks=True):
+        Taskman.update_job_list()
+        Taskman.show_status()
+        if resume_incomplete_tasks:
+            Taskman.resume_incomplete_tasks()
+
 
 def _handle_command(cmd_str):
     tokens = cmd_str.split(' ')
@@ -257,15 +276,17 @@ def _handle_command(cmd_str):
 def _show_commands():
     print('-------------------')
     print('Available commands:')
-    for name, fn in cmds.items():
+    for name, fn in sorted(cmds.items(), key=lambda x: x[0]):
         sig = inspect.signature(fn)
         params = list(sig.parameters.values())
         print(name, ':', '; '.join([str(p) for p in params]))
 
 
 def _match(pattern, name):
-    match = lambda x: x.startswith(pattern[:-1]) if pattern.endswith('*') else lambda x: x == pattern
-    return match(name)
+    if pattern.endswith('*'):
+        return name.startswith(pattern[:-1])
+    else:
+        return name == pattern
 
 
 def submit(template_file, args_str, task_name):
@@ -275,7 +296,7 @@ def submit(template_file, args_str, task_name):
 
 def continu(task_name):
     for task_id, job in Taskman.jobs.items():
-        if job.status == JobStatus.Finished and _match(task_name, job.name):
+        if job.status in [JobStatus.Finished, JobStatus.Dead] and _match(task_name, job.name):
             Taskman.submit(job)
 
 
@@ -286,29 +307,48 @@ def cancel(task_name):
 
 
 def copy(task_name):
+    submitted = set()
     for task_id, job in Taskman.jobs.items():
-        if _match(task_name, job.name):
+        if job.name not in submitted and _match(task_name, job.name):
             job = Taskman.create_task(job.template_file, job.args_str, job.name)
             Taskman.submit(job)
+            submitted.add(job.name)
+
+
+def show(task_name):
+    print()
+    for task_id, job in Taskman.jobs.items():
+        if _match(task_name, job.name):
+            print('\033[1m' + job.name + '\033[0m :', job.args_str)
+    print()
+    input('Press any key...')
+
+
+def pack(task_name):
+    checkpoint_paths = []
+    for task_id, job in Taskman.jobs.items():
+        if _match(task_name, job.name):
+            checkpoint_paths.append(job.name + '/' + job.task_id)
+    # Call pack.sh
+    subprocess.Popen([homedir + '/pack.sh'] + checkpoint_paths)
 
 
 # Available commands
-cmds = {'sub': submit, 'cont': continu, 'cancel': cancel, 'copy': copy}
+cmds = {'sub': submit, 'cont': continu, 'cancel': cancel, 'copy': copy, 'pack': pack, 'show': show}
 
 
 if __name__ == '__main__':
-    taskman = Taskman()
     while True:
         command_mode = False
         try:
-            taskman.update_job_list()
-            taskman.show_status()
-            time.sleep(4)
+            Taskman.update()
+            time.sleep(10)
         except KeyboardInterrupt:
             command_mode = True
 
         if command_mode:
-            print()
+            print('\rUpdating, please wait...')
+            Taskman.update(resume_incomplete_tasks=False)
             _show_commands()
             command = input('\033[1mCommand>>\033[0m ')
             _handle_command(command)
