@@ -254,6 +254,8 @@ class Taskman(object):
             status_line = line_fmt.format(job.status, job.name, task_id, job.moab_id, time_ago, *report_columns)
             if job.status.needs_attention:
                 status_line = '\033[31m' + status_line + '\033[0m'
+            elif job.status == JobStatus.Finished:
+                status_line = '\033[32m' + status_line[:8] + '\033[0m' + status_line[8:]
             print(status_line)
 
     @staticmethod
