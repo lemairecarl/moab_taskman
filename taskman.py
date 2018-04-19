@@ -8,7 +8,8 @@ from enum import Enum
 from os import makedirs
 from os.path import expandvars
 
-homedir = expandvars('$HOME')
+HOMEDIR = expandvars('$HOME')
+DB_STARTED_TASKS = HOMEDIR + '/taskman/started'
 
 
 def fmt_time(seconds):
@@ -58,7 +59,7 @@ class Job(object):
 
     @staticmethod
     def get_path(task_name, task_id):
-        script_path = homedir + '/script_moab/taskman/' + task_name
+        script_path = HOMEDIR + '/script_moab/taskman/' + task_name
         script_file = script_path + '/' + task_id + '.sh'
         return script_path, script_file
 
@@ -113,11 +114,11 @@ class Taskman(object):
         script_path, script_file = Job.get_path(task_name, task_id)
 
         # Get template
-        with open(homedir + '/script_moab/' + template_file + '.sh', 'r') as f:
+        with open(HOMEDIR + '/script_moab/' + template_file + '.sh', 'r') as f:
             template = f.readlines()
 
         # Append post exec bash script
-        with open(homedir + '/script_moab/taskman_post_exec.sh', 'r') as f:
+        with open(HOMEDIR + '/script_moab/taskman_post_exec.sh', 'r') as f:
             post_exec = f.readlines()
         template += post_exec
 
@@ -138,6 +139,19 @@ class Taskman(object):
         return Job(task_id, task_name, None, None, template_file, args_str)
 
     @staticmethod
+    def write_started(job, db_file=None):
+        if db_file is None:
+            f = open(DB_STARTED_TASKS, 'a')
+        else:
+            f = db_file
+
+        line = '{};{};{};{};{}'.format(job.task_id, job.name, job.moab_id, job.template_file, job.args_str)
+        f.write(line + '\n')
+
+        if db_file is None:
+            f.close()
+
+    @staticmethod
     def submit(job):
         # Submit using msub
         print('Calling msub...', end=' ')
@@ -146,14 +160,12 @@ class Taskman(object):
             return
 
         # Get moab job id
-        moab_id = output.strip()
+        job.moab_id = output.strip()
 
         # Add to 'started' database
-        with open(homedir + '/taskman/started', 'a') as f:
-            line = '{};{};{};{};{}'.format(job.task_id, job.name, moab_id, job.template_file, job.args_str)
-            f.write(line + '\n')
+        Taskman.write_started(job)
 
-        print('Submitted.  TaskmanID: {}  MoabID: {}'.format(job.task_id, moab_id))
+        print('Submitted.  TaskmanID: {}  MoabID: {}'.format(job.task_id, job.moab_id))
 
     @staticmethod
     def cancel(task_id):
@@ -163,7 +175,7 @@ class Taskman(object):
             return
 
         # Add to 'finished' database
-        with open(homedir + '/taskman/finished', 'a') as f:
+        with open(HOMEDIR + '/taskman/finished', 'a') as f:
             line = '{},{},{}'.format(job.moab_id, job.name, 'cancel')
             f.write(line + '\n')
 
@@ -171,11 +183,11 @@ class Taskman(object):
 
     @staticmethod
     def read_task_db():
-        with open(homedir + '/taskman/started', 'r') as f:
+        with open(HOMEDIR + '/taskman/started', 'r') as f:
             started_tasks_csv = f.readlines()
-        with open(homedir + '/taskman/dead', 'r') as f:
+        with open(HOMEDIR + '/taskman/dead', 'r') as f:
             dead_tasks_csv = f.readlines()
-        with open(homedir + '/taskman/finished', 'r') as f:
+        with open(HOMEDIR + '/taskman/finished', 'r') as f:
             finished_tasks_csv = f.readlines()
 
         started_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(';') for l in started_tasks_csv]}
@@ -214,7 +226,7 @@ class Taskman(object):
     @staticmethod
     def get_log(job, error_log=False):
         ext_prefix = '.e' if error_log else '.o'
-        output_filepath = homedir + '/logs/' + job.name + ext_prefix + job.moab_id
+        output_filepath = HOMEDIR + '/logs/' + job.name + ext_prefix + job.moab_id
         with open(output_filepath, 'r') as f:
             lines = f.readlines()
         return lines
@@ -317,7 +329,7 @@ def fromckpt(template_file, args_str, task_name, ckpt_file):
     print('Moving checkpoint...')
     job_dir = expandvars('$SCKPT') + '/' + job.name + '/' + job.task_id
     makedirs(job_dir)
-    shutil.move(homedir + '/' + ckpt_file, job_dir)
+    shutil.move(HOMEDIR + '/' + ckpt_file, job_dir)
     Taskman.submit(job)
 
 
@@ -383,24 +395,22 @@ def pack(task_name):
         if _match(task_name, job.name):
             checkpoint_paths.append(job.name + '/' + job.task_id)
     # Call pack.sh
-    subprocess.Popen([homedir + '/pack.sh'] + checkpoint_paths)
+    subprocess.Popen([HOMEDIR + '/pack.sh'] + checkpoint_paths)
 
 
 def clean():
-    shutil.copyfile(homedir + '/taskman/started',
-                    homedir + '/taskman/old/started_' + datetime.now().strftime("%m-%d_%H-%M-%S"))
+    shutil.copyfile(DB_STARTED_TASKS,
+                    HOMEDIR + '/taskman/old/started_' + datetime.now().strftime("%m-%d_%H-%M-%S"))
 
     started_tasks, dead_tasks, finished_tasks = Taskman.read_task_db()
 
-    # TODO merge some of this code with Taskman.create_task
-    with open(homedir + '/taskman/started', 'w') as f:
+    with open(DB_STARTED_TASKS, 'w') as f:
         for task_id, fields in started_tasks.items():
             name, moab_id, template_file, args_str = fields
             remove = moab_id in dead_tasks or moab_id in finished_tasks
             if not remove:
-                line = [task_id] + fields
-                line_str = ';'.join([str(x) for x in line])
-                f.write(line_str + '\n')
+                job = Job(task_id, name, moab_id, None, template_file, args_str)
+                Taskman.write_started(job, f)
 
 
 # Available commands
