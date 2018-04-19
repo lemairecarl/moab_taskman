@@ -2,6 +2,7 @@ import json
 import subprocess
 import inspect
 import time
+import shutil
 from datetime import datetime
 from enum import Enum
 from os import makedirs
@@ -169,9 +170,7 @@ class Taskman(object):
         print(output.strip())
 
     @staticmethod
-    def update_job_list():
-        active_jobs, eligible_jobs, blocked_jobs = Taskman.get_moab_queue()
-
+    def read_task_db():
         with open(homedir + '/taskman/started', 'r') as f:
             started_tasks_csv = f.readlines()
         with open(homedir + '/taskman/dead', 'r') as f:
@@ -182,6 +181,13 @@ class Taskman(object):
         started_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(';') for l in started_tasks_csv]}
         dead_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(',') for l in dead_tasks_csv]}
         finished_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(',') for l in finished_tasks_csv]}
+        return started_tasks, dead_tasks, finished_tasks
+
+    @staticmethod
+    def update_job_list():
+        active_jobs, eligible_jobs, blocked_jobs = Taskman.get_moab_queue()
+
+        started_tasks, dead_tasks, finished_tasks = Taskman.read_task_db()
 
         jobs = {}
         for task_id, fields in sorted(started_tasks.items(), key=lambda x: x[1][0]):
@@ -206,16 +212,23 @@ class Taskman(object):
         Taskman.update_report()
 
     @staticmethod
+    def get_log(job, error_log=False):
+        ext_prefix = '.e' if error_log else '.o'
+        output_filepath = homedir + '/logs/' + job.name + ext_prefix + job.moab_id
+        with open(output_filepath, 'r') as f:
+            lines = f.readlines()
+        return lines
+
+    @staticmethod
     def update_report():
         Taskman.columns = set()
         for task_id, job in Taskman.jobs.items():
-            output_filepath = homedir + '/logs/' + job.name + '.o' + job.moab_id
             report_line = None
             try:
-                with open(output_filepath, 'r') as f:
-                    for line in f:
-                        if line[:8] == '!taskman':
-                            report_line = line
+                log_lines = Taskman.get_log(job)
+                for line in log_lines:
+                    if line[:8] == '!taskman':
+                        report_line = line
             except FileNotFoundError:
                 pass
             if report_line is not None:
@@ -271,8 +284,11 @@ def _handle_command(cmd_str):
     cmd_name = tokens[0]
     if cmd_name == '':
         return
-    cmd_args = ' '.join(tokens[1:])
-    cmds[cmd_name](*cmd_args.split(';'))
+    if len(tokens) == 1:
+        cmds[cmd_name]()
+    else:
+        cmd_args = ' '.join(tokens[1:])
+        cmds[cmd_name](*cmd_args.split(';'))
 
 
 def _show_commands():
@@ -296,9 +312,37 @@ def submit(template_file, args_str, task_name):
     Taskman.submit(job)
 
 
+def fromckpt(template_file, args_str, task_name, ckpt_file):
+    job = Taskman.create_task(template_file, args_str, task_name)
+    print('Moving checkpoint...')
+    job_dir = expandvars('$SCKPT') + '/' + job.name + '/' + job.task_id
+    makedirs(job_dir)
+    shutil.move(homedir + '/' + ckpt_file, job_dir)
+    Taskman.submit(job)
+
+
+def multi_sub():
+    print('Enter multiple submission lines. Add an empty line to end.')
+    print()
+    a = []
+    while True:
+        i = input()
+        if i == '':
+            break
+        a.append(i)
+    print('Tasks to submit:')
+    for i in a:
+        print(i)
+    print()
+    r = input('Submit? (y/n)')
+    if r == 'y':
+        for i in a:
+            submit(*i.split(';'))
+
+
 def continu(task_name):
     for task_id, job in Taskman.jobs.items():
-        if job.status in [JobStatus.Finished, JobStatus.Dead] and _match(task_name, job.name):
+        if job.status in [JobStatus.Finished, JobStatus.Dead, JobStatus.Lost] and _match(task_name, job.name):
             Taskman.submit(job)
 
 
@@ -322,7 +366,14 @@ def show(task_name):
     for task_id, job in Taskman.jobs.items():
         if _match(task_name, job.name):
             print('\033[1m' + job.name + '\033[0m :', job.args_str)
-    print()
+            print('\033[30;44m' + ' ' * 40 + '\rOutput\033[0m')
+            for l in Taskman.get_log(job)[-20:]:
+                print(l.strip())
+            print('\033[30;44m' + ' ' * 40 + '\rError\033[0m')
+            for l in Taskman.get_log(job, error_log=True)[-20:]:
+                print(l.strip())
+            print('\033[30;44m' + ' ' * 40 + '\033[0m')
+            print()
     input('Press any key...')
 
 
@@ -335,8 +386,26 @@ def pack(task_name):
     subprocess.Popen([homedir + '/pack.sh'] + checkpoint_paths)
 
 
+def clean():
+    shutil.copyfile(homedir + '/taskman/started',
+                    homedir + '/taskman/old/started_' + datetime.now().strftime("%m-%d_%H-%M-%S"))
+
+    started_tasks, dead_tasks, finished_tasks = Taskman.read_task_db()
+
+    # TODO merge some of this code with Taskman.create_task
+    with open(homedir + '/taskman/started', 'w') as f:
+        for task_id, fields in started_tasks.items():
+            name, moab_id, template_file, args_str = fields
+            remove = moab_id in dead_tasks or moab_id in finished_tasks
+            if not remove:
+                line = [task_id] + fields
+                line_str = ';'.join([str(x) for x in line])
+                f.write(line_str + '\n')
+
+
 # Available commands
-cmds = {'sub': submit, 'cont': continu, 'cancel': cancel, 'copy': copy, 'pack': pack, 'show': show}
+cmds = {'sub': submit, 'fromckpt': fromckpt, 'multisub': multi_sub, 'cont': continu, 'cancel': cancel, 'copy': copy,
+        'pack': pack, 'show': show, 'clean': clean}
 
 
 if __name__ == '__main__':
