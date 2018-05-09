@@ -279,8 +279,10 @@ class Taskman(object):
             status_line = line_fmt.format(job.status, job.name, task_id, job.moab_id, time_ago, *report_columns)
             if job.status.needs_attention:
                 status_line = '\033[31m' + status_line + '\033[0m'
+            elif job.status == JobStatus.Blocked:
+                status_line = '\033[30;47m' + status_line + '\033[0m'
             elif job.status == JobStatus.Finished:
-                status_line = '\033[32m' + status_line[:8] + '\033[0m' + status_line[8:]
+                status_line = '\033[32;107m' + status_line[:8] + '\033[;107m' + status_line[8:] + '\033[0m'
             print(status_line)
 
     @staticmethod
@@ -392,7 +394,7 @@ def show(task_name):
 def pack(task_name):
     checkpoint_paths = []
     for task_id, job in Taskman.jobs.items():
-        if _match(task_name, job.name):
+        if job.status == JobStatus.Finished and _match(task_name, job.name):
             checkpoint_paths.append(job.name + '/' + job.task_id)
     # Call pack.sh
     subprocess.Popen([HOMEDIR + '/pack.sh'] + checkpoint_paths)
