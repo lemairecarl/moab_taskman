@@ -407,7 +407,7 @@ def pack(task_name):
     subprocess.Popen([HOMEDIR + '/pack.sh'] + checkpoint_paths)
 
 
-def clean():
+def clean(task_name=None):
     shutil.copyfile(DB_STARTED_TASKS,
                     HOMEDIR + '/taskman/old/started_' + datetime.now().strftime("%m-%d_%H-%M-%S"))
 
@@ -417,6 +417,8 @@ def clean():
         for task_id, fields in started_tasks.items():
             name, moab_id, template_file, args_str = fields
             remove = moab_id in dead_tasks or moab_id in finished_tasks
+            if task_name is not None:
+                remove = _match(task_name, name) and remove
             if not remove:
                 job = Job(task_id, name, moab_id, None, template_file, args_str)
                 Taskman.write_started(job, f)
