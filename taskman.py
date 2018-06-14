@@ -51,6 +51,7 @@ class Job(object):
         self.template_file = template_file
         self.args_str = args_str
         self.report = {}
+        self.finish_msg = ''
 
     @property
     def script_file(self):
@@ -204,22 +205,25 @@ class Taskman(object):
         jobs = {}
         for task_id, fields in sorted(started_tasks.items(), key=lambda x: x[1][0]):
             name, moab_id, template_file, args_str = fields
-            if moab_id in dead_tasks:
-                status = JobStatus.Dead
-            elif moab_id in finished_tasks:
-                status = JobStatus.Finished
-            elif active_jobs is None:
-                status = JobStatus.Unknown  # showq has timed out
-            elif moab_id in active_jobs:
-                status = JobStatus.Running
-            elif moab_id in eligible_jobs:
-                status = JobStatus.Waiting
-            elif moab_id in blocked_jobs:
-                status = JobStatus.Blocked
-            else:
-                status = JobStatus.Lost
+            j = Job(task_id, name, moab_id, None, template_file, args_str)
 
-            jobs[task_id] = Job(task_id, name, moab_id, status, template_file, args_str)
+            if moab_id in dead_tasks:
+                j.status = JobStatus.Dead
+            elif moab_id in finished_tasks:
+                j.status = JobStatus.Finished
+                j.finish_msg = finished_tasks[moab_id][1]
+            elif active_jobs is None:
+                j.status = JobStatus.Unknown  # showq has timed out
+            elif moab_id in active_jobs:
+                j.status = JobStatus.Running
+            elif moab_id in eligible_jobs:
+                j.status = JobStatus.Waiting
+            elif moab_id in blocked_jobs:
+                j.status = JobStatus.Blocked
+            else:
+                j.status = JobStatus.Lost
+
+            jobs[task_id] = j
         Taskman.jobs = jobs
         Taskman.update_report()
 
@@ -282,7 +286,10 @@ class Taskman(object):
             elif job.status == JobStatus.Blocked:
                 status_line = '\033[30;47m' + status_line + '\033[0m'
             elif job.status == JobStatus.Finished:
-                status_line = '\033[32;107m' + status_line[:8] + '\033[;107m' + status_line[8:] + '\033[0m'
+                finished_status = {'ok': '\033[32;107mFinished\033[;107m',  # Green
+                                   'cancel': '\033[;107mCancel\'d'  # Black
+                                   }.get(job.finish_msg, '\033[;107mFinished')
+                status_line = finished_status + status_line[8:] + '\033[0m'
             print(status_line)
 
     @staticmethod
@@ -381,10 +388,10 @@ def show(task_name):
         if _match(task_name, job.name):
             print('\033[1m' + job.name + '\033[0m :', job.args_str)
             print('\033[30;44m' + ' ' * 40 + '\rOutput\033[0m')
-            for l in Taskman.get_log(job)[-20:]:
+            for l in Taskman.get_log(job)[-10:]:
                 print(l.strip())
             print('\033[30;44m' + ' ' * 40 + '\rError\033[0m')
-            for l in Taskman.get_log(job, error_log=True)[-20:]:
+            for l in Taskman.get_log(job, error_log=True)[-30:]:
                 print(l.strip())
             print('\033[30;44m' + ' ' * 40 + '\033[0m')
             print()
