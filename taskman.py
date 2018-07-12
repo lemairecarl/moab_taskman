@@ -109,13 +109,11 @@ class Taskman(object):
         return lists['active j'], lists['eligible'], lists['blocked ']
 
     @staticmethod
-    def create_task(template_file, args_str, task_name):
-        # Generate id
-        task_id = datetime.now().strftime("%m-%d_%H-%M-%S_%f")
-        script_path, script_file = Job.get_path(task_name, task_id)
+    def generate_script(job):
+        script_path, script_file = Job.get_path(job.name, job.task_id)
 
         # Get template
-        with open(HOMEDIR + '/script_moab/' + template_file + '.sh', 'r') as f:
+        with open(HOMEDIR + '/script_moab/' + job.template_file + '.sh', 'r') as f:
             template = f.readlines()
 
         # Append post exec bash script
@@ -126,9 +124,9 @@ class Taskman(object):
         # Replace variables
         script_lines = []
         for line in template:
-            line = line.replace('$TASKMAN_NAME', task_name)
-            line = line.replace('$TASKMAN_ID', task_id)
-            line = line.replace('$TASKMAN_ARGS', args_str)
+            line = line.replace('$TASKMAN_NAME', job.name)
+            line = line.replace('$TASKMAN_ID', job.task_id)
+            line = line.replace('$TASKMAN_ARGS', job.args_str)
             script_lines.append(line)
 
         # Write script
@@ -136,8 +134,17 @@ class Taskman(object):
         with open(script_file, 'w') as f:
             f.writelines(script_lines)
 
+        return script_file
+
+    @staticmethod
+    def create_task(template_file, args_str, task_name):
+        # Generate id
+        task_id = datetime.now().strftime("%m-%d_%H-%M-%S_%f")
+        job = Job(task_id, task_name, None, None, template_file, args_str)
+        script_file = Taskman.generate_script(job)
+
         print('Created', script_file)
-        return Job(task_id, task_name, None, None, template_file, args_str)
+        return job
 
     @staticmethod
     def write_started(job, db_file=None):
@@ -233,7 +240,7 @@ class Taskman(object):
         output_filepath = HOMEDIR + '/logs/' + job.name + ext_prefix + job.moab_id
         with open(output_filepath, 'r') as f:
             lines = f.readlines()
-        return lines
+        return lines, output_filepath
 
     @staticmethod
     def update_report():
@@ -241,7 +248,7 @@ class Taskman(object):
         for task_id, job in Taskman.jobs.items():
             report_line = None
             try:
-                log_lines = Taskman.get_log(job)
+                log_lines, _ = Taskman.get_log(job)
                 for line in log_lines:
                     if line[:8] == '!taskman':
                         report_line = line
@@ -386,12 +393,15 @@ def show(task_name):
     print()
     for task_id, job in Taskman.jobs.items():
         if _match(task_name, job.name):
+            out_log, out_log_file = Taskman.get_log(job)
+            err_log, err_log_file = Taskman.get_log(job, error_log=True)
+
             print('\033[1m' + job.name + '\033[0m :', job.args_str)
-            print('\033[30;44m' + ' ' * 40 + '\rOutput\033[0m')
-            for l in Taskman.get_log(job)[-10:]:
+            print('\033[30;44m' + ' ' * 40 + '\033[0m ' + out_log_file + '\r\033[2C Output ')
+            for l in out_log[-20:]:
                 print(l.strip())
-            print('\033[30;44m' + ' ' * 40 + '\rError\033[0m')
-            for l in Taskman.get_log(job, error_log=True)[-30:]:
+            print('\033[30;44m' + ' ' * 40 + '\033[0m ' + err_log_file + '\r\033[2C Error ')
+            for l in err_log[-30:]:
                 print(l.strip())
             print('\033[30;44m' + ' ' * 40 + '\033[0m')
             print()
@@ -407,7 +417,7 @@ def pack(task_name):
     subprocess.Popen([HOMEDIR + '/pack.sh'] + checkpoint_paths)
 
 
-def clean(task_name=None):
+def _clean(task_name=None, clean_all=False):
     shutil.copyfile(DB_STARTED_TASKS,
                     HOMEDIR + '/taskman/old/started_' + datetime.now().strftime("%m-%d_%H-%M-%S"))
 
@@ -416,7 +426,7 @@ def clean(task_name=None):
     with open(DB_STARTED_TASKS, 'w') as f:
         for task_id, fields in started_tasks.items():
             name, moab_id, template_file, args_str = fields
-            remove = moab_id in dead_tasks or moab_id in finished_tasks
+            remove = clean_all or (moab_id in dead_tasks or moab_id in finished_tasks)
             if task_name is not None:
                 remove = _match(task_name, name) and remove
             if not remove:
@@ -424,9 +434,24 @@ def clean(task_name=None):
                 Taskman.write_started(job, f)
 
 
+def clean(task_name=None):
+    _clean(task_name)
+
+
+def cleanall(task_name=None):
+    _clean(task_name, clean_all=True)
+
+
+def regen_script(task_name):
+    for task_id, job in Taskman.jobs.items():
+        if _match(task_name, job.name):
+            script = Taskman.generate_script(job)
+            print('Regenerated', script)
+
+
 # Available commands
 cmds = {'sub': submit, 'fromckpt': fromckpt, 'multisub': multi_sub, 'cont': continu, 'cancel': cancel, 'copy': copy,
-        'pack': pack, 'show': show, 'clean': clean}
+        'pack': pack, 'show': show, 'clean': clean, 'cleanall': cleanall, 'regen': regen_script}
 
 
 if __name__ == '__main__':
