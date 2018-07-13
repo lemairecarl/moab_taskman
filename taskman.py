@@ -52,6 +52,7 @@ class Job(object):
         self.args_str = args_str
         self.report = {}
         self.finish_msg = ''
+        self.prev_moab_id = ''
 
     @property
     def script_file(self):
@@ -167,6 +168,8 @@ class Taskman(object):
         if output is None:
             return
 
+        job.prev_moab_id = job.moab_id or ''
+
         # Get moab job id
         job.moab_id = output.strip()
 
@@ -237,7 +240,8 @@ class Taskman(object):
     @staticmethod
     def get_log(job, error_log=False):
         ext_prefix = '.e' if error_log else '.o'
-        output_filepath = HOMEDIR + '/logs/' + job.name + ext_prefix + job.moab_id
+        moab_id = job.prev_moab_id if job.status == JobStatus.Blocked else job.moab_id
+        output_filepath = HOMEDIR + '/logs/' + job.name + ext_prefix + moab_id
         with open(output_filepath, 'r') as f:
             lines = f.readlines()
         return lines, output_filepath
