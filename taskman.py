@@ -182,19 +182,20 @@ class Taskman(object):
 
     @staticmethod
     def submit(job):
-        # Submit using msub
-        print('Calling msub...', end=' ')
-        output = Taskman.get_cmd_output(['msub', job.script_file])
+        subm_command = 'sbatch' if SLURM_MODE else 'msub'
+
+        print('Calling ' + subm_command + '...', end=' ')
+        output = Taskman.get_cmd_output([subm_command, job.script_file])
         if output is None:
             return
 
-        # Get moab job id
-        job.moab_id = output.strip()
+        job.moab_id = output.strip().split(' ')[-1]
 
         # Add to 'started' database
         Taskman.write_started(job)
 
-        print('Submitted.  TaskmanID: {}  MoabID: {}'.format(job.task_id, job.moab_id))
+        print('Submitted.  TaskmanID: {}  Moab/SLURM ID: {}'.format(job.task_id, job.moab_id))
+
 
     @staticmethod
     def cancel(task_id):
