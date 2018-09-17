@@ -12,7 +12,7 @@ HOMEDIR = expandvars('$HOME')
 DB_STARTED_TASKS = HOMEDIR + '/taskman/started'
 SCRIPTS_FOLDER = env_vars.get('TASKMAN_SCRIPTS', HOMEDIR + '/script_moab')  # Dir with your scripts. Contains /taskman
 CKPT_FOLDER = env_vars['TASKMAN_CKPTS']
-SLURM_MODE = 'SLURM_JOB_ID' in env_vars
+SLURM_MODE = 'TASKMAN_USE_SLURM' in env_vars
 
 
 def fmt_time(seconds):
