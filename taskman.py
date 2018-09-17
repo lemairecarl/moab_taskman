@@ -128,7 +128,7 @@ class Taskman(object):
             return None
 
         showq_lines = output.split('\n')
-        showq_lines = [l.strip() for l in showq_lines]
+        showq_lines = [l for l in showq_lines]
         statuses = {}
         for line in showq_lines[1:]:  # skip header
             slurm_id = line[:8].strip()
@@ -223,7 +223,8 @@ class Taskman(object):
         if started_tasks_csv[0].strip() == '':
             started_tasks = None
         else:
-            started_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(';') for l in started_tasks_csv]}
+            started_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(';')
+                                                                  for l in started_tasks_csv if l.strip() != '']}
         dead_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(',') for l in dead_tasks_csv]}
         finished_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(',') for l in finished_tasks_csv]}
         return started_tasks, dead_tasks, finished_tasks
