@@ -5,11 +5,13 @@ import time
 import shutil
 from datetime import datetime
 from enum import Enum
-from os import makedirs
+from os import makedirs, environ as env_vars
 from os.path import expandvars
 
 HOMEDIR = expandvars('$HOME')
 DB_STARTED_TASKS = HOMEDIR + '/taskman/started'
+SCRIPTS_FOLDER = env_vars.get('TASKMAN_SCRIPTS', HOMEDIR + '/script_moab')  # Dir with your scripts. Contains /taskman
+SLURM_MODE = 'SLURM_JOB_ID' in env_vars
 
 
 def fmt_time(seconds):
@@ -27,8 +29,8 @@ class JobStatus(Enum):
     Unknown = '?'
     Running = 'Running'
     Waiting = 'Waiting'
-    Blocked = 'Blocked'
     Lost = 'Lost'
+    Other = ''
 
     def __str__(self):
         return self.value
@@ -48,6 +50,7 @@ class Job(object):
         self.moab_id = moab_id
         self.name = name
         self.status = status
+        self.status_msg = None
         self.template_file = template_file
         self.args_str = args_str
         self.report = {}
@@ -60,7 +63,7 @@ class Job(object):
 
     @staticmethod
     def get_path(task_name, task_id):
-        script_path = HOMEDIR + '/script_moab/taskman/' + task_name
+        script_path = SCRIPTS_FOLDER + '/taskman/' + task_name
         script_file = script_path + '/' + task_id + '.sh'
         return script_path, script_file
 
@@ -84,16 +87,24 @@ class Taskman(object):
         return output.decode('UTF-8')
 
     @staticmethod
+    def get_queue():
+        if SLURM_MODE:
+            return Taskman.get_slurm_queue()
+        else:
+            return Taskman.get_moab_queue()
+
+    @staticmethod
     def get_moab_queue():
         args = ['showq', '-w', expandvars('user=$USER'), '--blocking']
         output = Taskman.get_cmd_output(args, timeout=10)
         if output is None:
-            return None, None, None
+            return None
 
         showq_lines = output.split('\n')
         showq_lines = [l.strip() for l in showq_lines]
         lists = {'active j': [], 'eligible': [], 'blocked ': []}
         cur_list = None
+        statuses = {}
         for line in showq_lines:
             if line[:8] in lists:
                 cur_list = line[:8]
@@ -105,8 +116,25 @@ class Taskman(object):
                             'Total' not in line and \
                             'blocked' not in line:
                 moab_id = line.split(' ')[0]
-                lists[cur_list].append(moab_id)
-        return lists['active j'], lists['eligible'], lists['blocked ']
+                statuses[moab_id] = cur_list
+        return statuses
+
+    @staticmethod
+    def get_slurm_queue():
+        args = ['squeue', '-u', expandvars('$USER')]
+        output = Taskman.get_cmd_output(args, timeout=10)
+        if output is None:
+            return None
+
+        showq_lines = output.split('\n')
+        showq_lines = [l.strip() for l in showq_lines]
+        statuses = {}
+        for line in showq_lines[1:]:  # skip header
+            slurm_id = line[:8].strip()
+            slurm_state = line[47:50].strip()
+            statuses[slurm_id] = slurm_state
+        return statuses
+
 
     @staticmethod
     def create_task(template_file, args_str, task_name):
@@ -115,11 +143,11 @@ class Taskman(object):
         script_path, script_file = Job.get_path(task_name, task_id)
 
         # Get template
-        with open(HOMEDIR + '/script_moab/' + template_file + '.sh', 'r') as f:
+        with open(SCRIPTS_FOLDER + '/' + template_file + '.sh', 'r') as f:
             template = f.readlines()
 
         # Append post exec bash script
-        with open(HOMEDIR + '/script_moab/taskman_post_exec.sh', 'r') as f:
+        with open(SCRIPTS_FOLDER + '/taskman_post_exec.sh', 'r') as f:
             post_exec = f.readlines()
         template += post_exec
 
@@ -198,7 +226,7 @@ class Taskman(object):
 
     @staticmethod
     def update_job_list():
-        active_jobs, eligible_jobs, blocked_jobs = Taskman.get_moab_queue()
+        statuses = Taskman.get_queue()
 
         started_tasks, dead_tasks, finished_tasks = Taskman.read_task_db()
 
@@ -212,16 +240,18 @@ class Taskman(object):
             elif moab_id in finished_tasks:
                 j.status = JobStatus.Finished
                 j.finish_msg = finished_tasks[moab_id][1]
-            elif active_jobs is None:
-                j.status = JobStatus.Unknown  # showq has timed out
-            elif moab_id in active_jobs:
-                j.status = JobStatus.Running
-            elif moab_id in eligible_jobs:
-                j.status = JobStatus.Waiting
-            elif moab_id in blocked_jobs:
-                j.status = JobStatus.Blocked
             else:
-                j.status = JobStatus.Lost
+                if statuses is None:
+                    j.status = JobStatus.Unknown  # showq has timed out
+                elif moab_id not in statuses:
+                    j.status = JobStatus.Lost
+                elif statuses[moab_id] in ['R', 'active j']:
+                    j.status = JobStatus.Running
+                elif statuses[moab_id] in ['PD', 'eligible']:
+                    j.status = JobStatus.Waiting
+                else:
+                    j.status = JobStatus.Other
+                    j.status_msg = statuses[moab_id]
 
             jobs[task_id] = j
         Taskman.jobs = jobs
@@ -266,7 +296,7 @@ class Taskman(object):
     @staticmethod
     def show_status():
         print('\033[2J\033[H')  # Clear screen and move cursor to top left
-        print('\033[97;45m( Moab Task Manager )\033[0m     ' + time.strftime("%H:%M:%S"), end='')
+        print('\033[97;45m( Experiment Manager )\033[0m     ' + time.strftime("%H:%M:%S"), end='')
         print('     \033[37mCtrl+C to enter command mode\033[0m')
 
         line_fmt = '{:<8} {:<30} {:<21} {:<7} {:<7}' + ' {:<12}' * len(Taskman.columns)
@@ -283,8 +313,8 @@ class Taskman(object):
             status_line = line_fmt.format(job.status, job.name, task_id, job.moab_id, time_ago, *report_columns)
             if job.status.needs_attention:
                 status_line = '\033[31m' + status_line + '\033[0m'
-            elif job.status == JobStatus.Blocked:
-                status_line = '\033[30;47m' + status_line + '\033[0m'
+            elif job.status == JobStatus.Other:
+                status_line = '\033[30;47m' + job.status_msg[:8].ljust(8) + status_line[8:] + '\033[0m'
             elif job.status == JobStatus.Finished:
                 finished_status = {'ok': '\033[32;107mFinished\033[;107m',  # Green
                                    'cancel': '\033[;107mCancel\'d'  # Black
