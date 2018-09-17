@@ -219,7 +219,10 @@ class Taskman(object):
         with open(HOMEDIR + '/taskman/finished', 'r') as f:
             finished_tasks_csv = f.readlines()
 
-        started_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(';') for l in started_tasks_csv]}
+        if started_tasks_csv[0].strip() == '':
+            started_tasks = None
+        else:
+            started_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(';') for l in started_tasks_csv]}
         dead_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(',') for l in dead_tasks_csv]}
         finished_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(',') for l in finished_tasks_csv]}
         return started_tasks, dead_tasks, finished_tasks
@@ -229,8 +232,11 @@ class Taskman(object):
         statuses = Taskman.get_queue()
 
         started_tasks, dead_tasks, finished_tasks = Taskman.read_task_db()
+        if started_tasks is None:
+            return
 
         jobs = {}
+
         for task_id, fields in sorted(started_tasks.items(), key=lambda x: x[1][0]):
             name, moab_id, template_file, args_str = fields
             j = Job(task_id, name, moab_id, None, template_file, args_str)
