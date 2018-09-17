@@ -11,6 +11,7 @@ from os.path import expandvars
 HOMEDIR = expandvars('$HOME')
 DB_STARTED_TASKS = HOMEDIR + '/taskman/started'
 SCRIPTS_FOLDER = env_vars.get('TASKMAN_SCRIPTS', HOMEDIR + '/script_moab')  # Dir with your scripts. Contains /taskman
+CKPT_FOLDER = env_vars.get('TASKMAN_CKPTS', env_vars['SCKPT'])
 SLURM_MODE = 'SLURM_JOB_ID' in env_vars
 
 
@@ -134,7 +135,6 @@ class Taskman(object):
             slurm_state = line[47:50].strip()
             statuses[slurm_id] = slurm_state
         return statuses
-
 
     @staticmethod
     def create_task(template_file, args_str, task_name):
@@ -366,7 +366,7 @@ def submit(template_file, args_str, task_name):
 def fromckpt(template_file, args_str, task_name, ckpt_file):
     job = Taskman.create_task(template_file, args_str, task_name)
     print('Moving checkpoint...')
-    job_dir = expandvars('$SCKPT') + '/' + job.name + '/' + job.task_id
+    job_dir = CKPT_FOLDER + '/' + job.name + '/' + job.task_id
     makedirs(job_dir)
     shutil.move(HOMEDIR + '/' + ckpt_file, job_dir)
     Taskman.submit(job)
@@ -393,7 +393,8 @@ def multi_sub():
 
 def continu(task_name):
     for task_id, job in Taskman.jobs.items():
-        if job.status in [JobStatus.Finished, JobStatus.Dead, JobStatus.Lost] and _match(task_name, job.name):
+        if (job.status in [JobStatus.Dead, JobStatus.Lost] or job.status == JobStatus.Finished
+                and job.finish_msg == 'cancel') and _match(task_name, job.name):
             Taskman.submit(job)
 
 
@@ -434,7 +435,17 @@ def pack(task_name):
         if job.status == JobStatus.Finished and _match(task_name, job.name):
             checkpoint_paths.append(job.name + '/' + job.task_id)
     # Call pack.sh
-    subprocess.Popen([HOMEDIR + '/pack.sh'] + checkpoint_paths)
+    subprocess.Popen([HOMEDIR + '/taskman/pack.sh'] + checkpoint_paths)
+
+
+def results(task_name):
+    files = []
+    for task_id, job in Taskman.jobs.items():
+        if job.status == JobStatus.Finished and _match(task_name, job.name):
+            filepath = job.name + '/' + job.task_id + '/results.csv'
+            files.append(filepath)
+    # Call pack.sh
+    subprocess.Popen([HOMEDIR + '/taskman/packresults.sh'] + files)
 
 
 def clean(task_name=None):
@@ -456,8 +467,7 @@ def clean(task_name=None):
 
 # Available commands
 cmds = {'sub': submit, 'fromckpt': fromckpt, 'multisub': multi_sub, 'cont': continu, 'cancel': cancel, 'copy': copy,
-        'pack': pack, 'show': show, 'clean': clean}
-
+        'pack': pack, 'results': results, 'show': show, 'clean': clean}
 
 if __name__ == '__main__':
     while True:
