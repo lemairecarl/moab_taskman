@@ -38,7 +38,7 @@ class JobStatus(Enum):
 
     @property
     def cancellable(self):
-        return self in [JobStatus.Running, JobStatus.Waiting, JobStatus.Blocked]
+        return self in [JobStatus.Running, JobStatus.Waiting]
 
     @property
     def needs_attention(self):
