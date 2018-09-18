@@ -200,7 +200,9 @@ class Taskman(object):
     @staticmethod
     def cancel(task_id):
         job = Taskman.jobs[task_id]
-        output = Taskman.get_cmd_output(['mjobctl', '-c', job.moab_id])
+        cmd_tokens = ['scancel', job.moab_id] if SLURM_MODE else ['mjobctl', '-c', job.moab_id]
+
+        output = Taskman.get_cmd_output(cmd_tokens)
         if output is None:
             return
 
