@@ -484,7 +484,7 @@ if __name__ == '__main__':
         command_mode = False
         try:
             Taskman.update()
-            time.sleep(10)
+            time.sleep(120)
         except KeyboardInterrupt:
             command_mode = True
 
