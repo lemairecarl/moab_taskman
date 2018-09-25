@@ -278,27 +278,29 @@ class Taskman(object):
     @staticmethod
     def get_log(job, error_log=False):
         ext_prefix = '.e' if error_log else '.o'
-        moab_id = job.prev_moab_id if job.status != JobStatus.Running else job.moab_id
+        moab_id = job.prev_moab_id if job.status in [JobStatus.Waiting,
+                                                     JobStatus.Unknown, JobStatus.Other] else job.moab_id
         output_filepath = HOMEDIR + '/logs/' + job.name + ext_prefix + moab_id
-        with open(output_filepath, 'r') as f:
-            lines = f.readlines()
+        try:
+            with open(output_filepath, 'r') as f:
+                lines = f.readlines()
+        except FileNotFoundError:
+            lines = None
         return lines, output_filepath
 
     @staticmethod
     def update_report():
         Taskman.columns = set()
         for task_id, job in Taskman.jobs.items():
-            report_line = None
-            try:
-                log_lines, _ = Taskman.get_log(job)
+            log_lines, _ = Taskman.get_log(job)
+            if log_lines is not None:
+                report_line = None
                 for line in log_lines:
                     if line[:8] == '!taskman':
                         report_line = line
-            except FileNotFoundError:
-                pass
-            if report_line is not None:
-                job.report = json.loads(report_line[8:])
-                Taskman.columns.update(job.report.keys())
+                if report_line is not None:
+                    job.report = json.loads(report_line[8:])
+                    Taskman.columns.update(job.report.keys())
         if 'time' in Taskman.columns:
             Taskman.columns.remove('time')
 
@@ -441,11 +443,13 @@ def show(task_name):
 
             print('\033[1m' + job.name + '\033[0m :', job.args_str)
             print('\033[30;44m' + ' ' * 40 + '\033[0m ' + out_log_file + '\r\033[2C Output ')
-            for l in out_log[-20:]:
-                print(l.strip())
+            if out_log is not None:
+                for l in out_log[-20:]:
+                    print(l.strip())
             print('\033[30;44m' + ' ' * 40 + '\033[0m ' + err_log_file + '\r\033[2C Error ')
-            for l in err_log[-30:]:
-                print(l.strip())
+            if err_log is not None:
+                for l in err_log[-30:]:
+                    print(l.strip())
             print('\033[30;44m' + ' ' * 40 + '\033[0m')
             print()
     input('Press any key...')
