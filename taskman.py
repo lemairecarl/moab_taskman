@@ -5,11 +5,14 @@ import time
 import shutil
 from datetime import datetime
 from enum import Enum
-from os import makedirs
+from os import makedirs, environ as env_vars
 from os.path import expandvars
 
 HOMEDIR = expandvars('$HOME')
 DB_STARTED_TASKS = HOMEDIR + '/taskman/started'
+SCRIPTS_FOLDER = env_vars.get('TASKMAN_SCRIPTS', HOMEDIR + '/script_moab')  # Dir with your scripts. Contains /taskman
+CKPT_FOLDER = env_vars['TASKMAN_CKPTS']
+SLURM_MODE = 'TASKMAN_USE_SLURM' in env_vars
 
 
 def fmt_time(seconds):
@@ -27,15 +30,15 @@ class JobStatus(Enum):
     Unknown = '?'
     Running = 'Running'
     Waiting = 'Waiting'
-    Blocked = 'Blocked'
     Lost = 'Lost'
+    Other = ''
 
     def __str__(self):
         return self.value
 
     @property
     def cancellable(self):
-        return self in [JobStatus.Running, JobStatus.Waiting, JobStatus.Blocked]
+        return self in [JobStatus.Running, JobStatus.Waiting]
 
     @property
     def needs_attention(self):
@@ -48,6 +51,7 @@ class Job(object):
         self.moab_id = moab_id
         self.name = name
         self.status = status
+        self.status_msg = None
         self.template_file = template_file
         self.args_str = args_str
         self.report = {}
@@ -61,7 +65,7 @@ class Job(object):
 
     @staticmethod
     def get_path(task_name, task_id):
-        script_path = HOMEDIR + '/script_moab/taskman/' + task_name
+        script_path = SCRIPTS_FOLDER + '/taskman/' + task_name
         script_file = script_path + '/' + task_id + '.sh'
         return script_path, script_file
 
@@ -85,16 +89,24 @@ class Taskman(object):
         return output.decode('UTF-8')
 
     @staticmethod
+    def get_queue():
+        if SLURM_MODE:
+            return Taskman.get_slurm_queue()
+        else:
+            return Taskman.get_moab_queue()
+
+    @staticmethod
     def get_moab_queue():
         args = ['showq', '-w', expandvars('user=$USER'), '--blocking']
         output = Taskman.get_cmd_output(args, timeout=10)
         if output is None:
-            return None, None, None
+            return None
 
         showq_lines = output.split('\n')
         showq_lines = [l.strip() for l in showq_lines]
         lists = {'active j': [], 'eligible': [], 'blocked ': []}
         cur_list = None
+        statuses = {}
         for line in showq_lines:
             if line[:8] in lists:
                 cur_list = line[:8]
@@ -106,19 +118,35 @@ class Taskman(object):
                             'Total' not in line and \
                             'blocked' not in line:
                 moab_id = line.split(' ')[0]
-                lists[cur_list].append(moab_id)
-        return lists['active j'], lists['eligible'], lists['blocked ']
+                statuses[moab_id] = cur_list
+        return statuses
+
+    @staticmethod
+    def get_slurm_queue():
+        args = ['squeue', '-u', expandvars('$USER')]
+        output = Taskman.get_cmd_output(args, timeout=10)
+        if output is None:
+            return None
+
+        showq_lines = output.split('\n')
+        showq_lines = [l for l in showq_lines]
+        statuses = {}
+        for line in showq_lines[1:]:  # skip header
+            slurm_id = line[:8].strip()
+            slurm_state = line[47:50].strip()
+            statuses[slurm_id] = slurm_state
+        return statuses
 
     @staticmethod
     def generate_script(job):
         script_path, script_file = Job.get_path(job.name, job.task_id)
 
         # Get template
-        with open(HOMEDIR + '/script_moab/' + job.template_file + '.sh', 'r') as f:
+        with open(SCRIPTS_FOLDER + '/' + template_file + '.sh', 'r') as f:
             template = f.readlines()
 
         # Append post exec bash script
-        with open(HOMEDIR + '/script_moab/taskman_post_exec.sh', 'r') as f:
+        with open(SCRIPTS_FOLDER + '/taskman_post_exec.sh', 'r') as f:
             post_exec = f.readlines()
         template += post_exec
 
@@ -162,26 +190,27 @@ class Taskman(object):
 
     @staticmethod
     def submit(job):
-        # Submit using msub
-        print('Calling msub...', end=' ')
-        output = Taskman.get_cmd_output(['msub', job.script_file])
+        subm_command = 'sbatch' if SLURM_MODE else 'msub'
+
+        print('Calling ' + subm_command + '...', end=' ')
+        output = Taskman.get_cmd_output([subm_command, job.script_file])
         if output is None:
             return
 
         job.prev_moab_id = job.moab_id or ''
-
-        # Get moab job id
-        job.moab_id = output.strip()
+        job.moab_id = output.strip().split(' ')[-1]
 
         # Add to 'started' database
         Taskman.write_started(job)
 
-        print('Submitted.  TaskmanID: {}  MoabID: {}'.format(job.task_id, job.moab_id))
+        print('Submitted.  TaskmanID: {}  Moab/SLURM ID: {}'.format(job.task_id, job.moab_id))
 
     @staticmethod
     def cancel(task_id):
         job = Taskman.jobs[task_id]
-        output = Taskman.get_cmd_output(['mjobctl', '-c', job.moab_id])
+        cmd_tokens = ['scancel', job.moab_id] if SLURM_MODE else ['mjobctl', '-c', job.moab_id]
+
+        output = Taskman.get_cmd_output(cmd_tokens)
         if output is None:
             return
 
@@ -201,18 +230,25 @@ class Taskman(object):
         with open(HOMEDIR + '/taskman/finished', 'r') as f:
             finished_tasks_csv = f.readlines()
 
-        started_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(';') for l in started_tasks_csv]}
+        if started_tasks_csv[0].strip() == '':
+            started_tasks = None
+        else:
+            started_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(';')
+                                                                  for l in started_tasks_csv if l.strip() != '']}
         dead_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(',') for l in dead_tasks_csv]}
         finished_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(',') for l in finished_tasks_csv]}
         return started_tasks, dead_tasks, finished_tasks
 
     @staticmethod
     def update_job_list():
-        active_jobs, eligible_jobs, blocked_jobs = Taskman.get_moab_queue()
+        statuses = Taskman.get_queue()
 
         started_tasks, dead_tasks, finished_tasks = Taskman.read_task_db()
+        if started_tasks is None:
+            return
 
         jobs = {}
+
         for task_id, fields in sorted(started_tasks.items(), key=lambda x: x[1][0]):
             name, moab_id, template_file, args_str = fields
             j = Job(task_id, name, moab_id, None, template_file, args_str)
@@ -222,16 +258,18 @@ class Taskman(object):
             elif moab_id in finished_tasks:
                 j.status = JobStatus.Finished
                 j.finish_msg = finished_tasks[moab_id][1]
-            elif active_jobs is None:
-                j.status = JobStatus.Unknown  # showq has timed out
-            elif moab_id in active_jobs:
-                j.status = JobStatus.Running
-            elif moab_id in eligible_jobs:
-                j.status = JobStatus.Waiting
-            elif moab_id in blocked_jobs:
-                j.status = JobStatus.Blocked
             else:
-                j.status = JobStatus.Lost
+                if statuses is None:
+                    j.status = JobStatus.Unknown  # showq has timed out
+                elif moab_id not in statuses:
+                    j.status = JobStatus.Lost
+                elif statuses[moab_id] in ['R', 'active j']:
+                    j.status = JobStatus.Running
+                elif statuses[moab_id] in ['PD', 'eligible']:
+                    j.status = JobStatus.Waiting
+                else:
+                    j.status = JobStatus.Other
+                    j.status_msg = statuses[moab_id]
 
             jobs[task_id] = j
         Taskman.jobs = jobs
@@ -240,7 +278,7 @@ class Taskman(object):
     @staticmethod
     def get_log(job, error_log=False):
         ext_prefix = '.e' if error_log else '.o'
-        moab_id = job.prev_moab_id if job.status == JobStatus.Blocked else job.moab_id
+        moab_id = job.prev_moab_id if job.status != JobStatus.Running else job.moab_id
         output_filepath = HOMEDIR + '/logs/' + job.name + ext_prefix + moab_id
         with open(output_filepath, 'r') as f:
             lines = f.readlines()
@@ -277,7 +315,7 @@ class Taskman(object):
     @staticmethod
     def show_status():
         print('\033[2J\033[H')  # Clear screen and move cursor to top left
-        print('\033[97;45m( Moab Task Manager )\033[0m     ' + time.strftime("%H:%M:%S"), end='')
+        print('\033[97;45m( Experiment Manager )\033[0m     ' + time.strftime("%H:%M:%S"), end='')
         print('     \033[37mCtrl+C to enter command mode\033[0m')
 
         line_fmt = '{:<8} {:<30} {:<21} {:<7} {:<7}' + ' {:<12}' * len(Taskman.columns)
@@ -294,8 +332,8 @@ class Taskman(object):
             status_line = line_fmt.format(job.status, job.name, task_id, job.moab_id, time_ago, *report_columns)
             if job.status.needs_attention:
                 status_line = '\033[31m' + status_line + '\033[0m'
-            elif job.status == JobStatus.Blocked:
-                status_line = '\033[30;47m' + status_line + '\033[0m'
+            elif job.status == JobStatus.Other:
+                status_line = '\033[30;47m' + job.status_msg[:8].ljust(8) + status_line[8:] + '\033[0m'
             elif job.status == JobStatus.Finished:
                 finished_status = {'ok': '\033[32;107mFinished\033[;107m',  # Green
                                    'cancel': '\033[;107mCancel\'d'  # Black
@@ -347,7 +385,7 @@ def submit(template_file, args_str, task_name):
 def fromckpt(template_file, args_str, task_name, ckpt_file):
     job = Taskman.create_task(template_file, args_str, task_name)
     print('Moving checkpoint...')
-    job_dir = expandvars('$SCKPT') + '/' + job.name + '/' + job.task_id
+    job_dir = CKPT_FOLDER + '/' + job.name + '/' + job.task_id
     makedirs(job_dir)
     shutil.move(HOMEDIR + '/' + ckpt_file, job_dir)
     Taskman.submit(job)
@@ -374,7 +412,8 @@ def multi_sub():
 
 def continu(task_name):
     for task_id, job in Taskman.jobs.items():
-        if (job.status in [JobStatus.Dead, JobStatus.Lost] or job.status == JobStatus.Finished and job.finish_msg == 'cancel') and _match(task_name, job.name):
+        if (job.status in [JobStatus.Dead, JobStatus.Lost] or job.status == JobStatus.Finished
+                and job.finish_msg == 'cancel') and _match(task_name, job.name):
             Taskman.submit(job)
 
 
@@ -418,7 +457,7 @@ def pack(task_name):
         if job.status == JobStatus.Finished and _match(task_name, job.name):
             checkpoint_paths.append(job.name + '/' + job.task_id)
     # Call pack.sh
-    subprocess.Popen([HOMEDIR + '/pack.sh'] + checkpoint_paths)
+    subprocess.Popen([HOMEDIR + '/taskman/pack.sh'] + checkpoint_paths)
 
 
 def results(task_name):
@@ -428,7 +467,7 @@ def results(task_name):
             filepath = job.name + '/' + job.task_id + '/results.csv'
             files.append(filepath)
     # Call pack.sh
-    subprocess.Popen([HOMEDIR + '/packresults.sh'] + files)
+    subprocess.Popen([HOMEDIR + '/taskman/packresults.sh'] + files)
 
 
 def _clean(task_name=None, clean_all=False):
@@ -473,7 +512,7 @@ if __name__ == '__main__':
         command_mode = False
         try:
             Taskman.update()
-            time.sleep(10)
+            time.sleep(120)
         except KeyboardInterrupt:
             command_mode = True
 
