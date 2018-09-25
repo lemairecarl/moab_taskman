@@ -142,7 +142,7 @@ class Taskman(object):
         script_path, script_file = Job.get_path(job.name, job.task_id)
 
         # Get template
-        with open(SCRIPTS_FOLDER + '/' + template_file + '.sh', 'r') as f:
+        with open(SCRIPTS_FOLDER + '/' + job.template_file + '.sh', 'r') as f:
             template = f.readlines()
 
         # Append post exec bash script
