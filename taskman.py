@@ -374,7 +374,7 @@ def multi_sub():
 
 def continu(task_name):
     for task_id, job in Taskman.jobs.items():
-        if job.status in [JobStatus.Finished, JobStatus.Dead, JobStatus.Lost] and _match(task_name, job.name):
+        if (job.status in [JobStatus.Dead, JobStatus.Lost] or job.status == JobStatus.Finished and job.finish_msg == 'cancel') and _match(task_name, job.name):
             Taskman.submit(job)
 
 
@@ -421,6 +421,16 @@ def pack(task_name):
     subprocess.Popen([HOMEDIR + '/pack.sh'] + checkpoint_paths)
 
 
+def results(task_name):
+    files = []
+    for task_id, job in Taskman.jobs.items():
+        if job.status == JobStatus.Finished and _match(task_name, job.name):
+            filepath = job.name + '/' + job.task_id + '/results.csv'
+            files.append(filepath)
+    # Call pack.sh
+    subprocess.Popen([HOMEDIR + '/packresults.sh'] + files)
+
+
 def _clean(task_name=None, clean_all=False):
     shutil.copyfile(DB_STARTED_TASKS,
                     HOMEDIR + '/taskman/old/started_' + datetime.now().strftime("%m-%d_%H-%M-%S"))
@@ -455,7 +465,7 @@ def regen_script(task_name):
 
 # Available commands
 cmds = {'sub': submit, 'fromckpt': fromckpt, 'multisub': multi_sub, 'cont': continu, 'cancel': cancel, 'copy': copy,
-        'pack': pack, 'show': show, 'clean': clean, 'cleanall': cleanall, 'regen': regen_script}
+        'pack': pack, 'results': results, 'show': show, 'clean': clean, 'cleanall': cleanall, 'regen': regen_script}
 
 
 if __name__ == '__main__':
