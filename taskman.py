@@ -3,6 +3,7 @@ import subprocess
 import inspect
 import time
 import shutil
+import math
 from datetime import datetime
 from enum import Enum
 from os import makedirs, environ as env_vars
@@ -331,7 +332,8 @@ class Taskman(object):
                 report_columns.append(val_str)
             time_ago = fmt_time(time.time() - job.report['time']) if 'time' in job.report else ''
             # Format line
-            status_line = line_fmt.format(job.status, job.name, task_id, job.moab_id, time_ago, *report_columns)
+            status_line = line_fmt.format(job.status, short_str(job.name, 30), task_id, job.moab_id, time_ago,
+                                          *report_columns)
             if job.status.needs_attention:
                 status_line = '\033[31m' + status_line + '\033[0m'
             elif job.status == JobStatus.Other:
@@ -504,6 +506,13 @@ def regen_script(task_name):
         if _match(task_name, job.name):
             script = Taskman.generate_script(job)
             print('Regenerated', script)
+
+
+def short_str(x, l):
+    """Shorten string from the center"""
+    left_side = math.floor((l - 2) / 2)
+    right_side = (l - 2) - left_side
+    return x[:left_side] + '..' + x[-right_side:]
 
 
 # Available commands
