@@ -231,7 +231,7 @@ class Taskman(object):
         with open(HOMEDIR + '/taskman/finished', 'r') as f:
             finished_tasks_csv = f.readlines()
 
-        if started_tasks_csv[0].strip() == '':
+        if len(started_tasks_csv) == 0 or started_tasks_csv[0].strip() == '':
             started_tasks = None
         else:
             started_tasks = {tokens[0]: tokens[1:] for tokens in [l.strip().split(';')
