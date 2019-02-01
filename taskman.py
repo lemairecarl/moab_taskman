@@ -271,7 +271,7 @@ class Taskman(object):
                     j.status = JobStatus.Waiting
                 else:
                     j.status = JobStatus.Other
-                    j.status_msg = statuses[moab_id]
+                    j.status_msg = statuses[moab_id].strip()
 
             jobs[task_id] = j
         Taskman.jobs = jobs
