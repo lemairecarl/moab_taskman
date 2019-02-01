@@ -326,8 +326,8 @@ class Taskman(object):
         print('\033[1m' + line_fmt.format('Status', 'Task name', 'Task id', 'Moab id', 'Updated',
                                           *sorted(Taskman.columns)) + '\033[0m')
         
-        waiting_tasks = [j for j in Taskman.jobs if j.status == JobStatus.Waiting]
-        non_waiting_tasks = [j for j in Taskman.jobs if j.status != JobStatus.Waiting]
+        waiting_tasks = [j for j in Taskman.jobs.values() if j.status == JobStatus.Waiting]
+        non_waiting_tasks = [j for j in Taskman.jobs.values() if j.status != JobStatus.Waiting]
         
         def print_job_line(job):
             # Get report data
