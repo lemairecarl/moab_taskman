@@ -326,8 +326,8 @@ class Taskman(object):
         print('\033[1m' + line_fmt.format('Status', 'Task name', 'Task id', 'Moab id', 'Updated',
                                           *sorted(Taskman.columns)) + '\033[0m')
         
-        waiting_tasks = [j for j in Taskman.jobs.values() if j.status == JobStatus.Waiting]
-        non_waiting_tasks = [j for j in Taskman.jobs.values() if j.status != JobStatus.Waiting]
+        waiting_tasks = [j for j in Taskman.jobs.values() if j.status == JobStatus.Waiting or j.status_msg == 'blocked']
+        non_waiting_tasks = [j for j in Taskman.jobs.values() if j not in waiting_tasks]
         
         def print_job_line(job):
             # Get report data
@@ -357,7 +357,7 @@ class Taskman(object):
                 print_job_line(job)
         if len(Taskman.jobs) > MAX_LINES:
             total_not_shown = len(Taskman.jobs) - MAX_LINES
-            print('[ ... {} tasks not shown - {} waiting tasks in total ... ]'.format(total_not_shown,
+            print('[ ... {} tasks not shown - {} waiting/blocked tasks in total ... ]'.format(total_not_shown,
                                                                                       len(waiting_tasks)))
             
 
