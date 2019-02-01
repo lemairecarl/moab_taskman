@@ -14,6 +14,7 @@ DB_STARTED_TASKS = HOMEDIR + '/taskman/started'
 SCRIPTS_FOLDER = env_vars.get('TASKMAN_SCRIPTS', HOMEDIR + '/script_moab')  # Dir with your scripts. Contains /taskman
 CKPT_FOLDER = env_vars['TASKMAN_CKPTS']
 SLURM_MODE = 'TASKMAN_USE_SLURM' in env_vars
+MAX_LINES = env_vars['TASKMAN_MAXLINES']
 
 
 def fmt_time(seconds):
@@ -324,7 +325,11 @@ class Taskman(object):
         line_fmt = '{:<8} {:<30} {:<21} {:<7} {:<7}' + ' {:<12}' * len(Taskman.columns)
         print('\033[1m' + line_fmt.format('Status', 'Task name', 'Task id', 'Moab id', 'Updated',
                                           *sorted(Taskman.columns)) + '\033[0m')
-        for task_id, job in sorted(Taskman.jobs.items(), key=lambda x: x[1].name):
+        
+        waiting_tasks = [j for j in Taskman.jobs if j.status == JobStatus.Waiting]
+        non_waiting_tasks = [j for j in Taskman.jobs if j.status != JobStatus.Waiting]
+        
+        def print_job_line(job):
             # Get report data
             report_columns = []
             for k in sorted(Taskman.columns):
@@ -332,7 +337,7 @@ class Taskman(object):
                 report_columns.append(val_str)
             time_ago = fmt_time(time.time() - job.report['time']) if 'time' in job.report else ''
             # Format line
-            status_line = line_fmt.format(job.status, short_str(job.name, 30), task_id, job.moab_id, time_ago,
+            status_line = line_fmt.format(job.status, short_str(job.name, 30), job.task_id, job.moab_id, time_ago,
                                           *report_columns)
             if job.status.needs_attention:
                 status_line = '\033[31m' + status_line + '\033[0m'
@@ -344,6 +349,17 @@ class Taskman(object):
                                    }.get(job.finish_msg, '\033[;107mFinished')
                 status_line = finished_status + status_line[8:] + '\033[0m'
             print(status_line)
+
+        for job in list(sorted(non_waiting_tasks, key=lambda x: x.name))[:MAX_LINES]:
+            print_job_line(job)
+        if len(non_waiting_tasks) < MAX_LINES:
+            for job in list(sorted(waiting_tasks, key=lambda x: x.name))[:MAX_LINES - len(non_waiting_tasks)]:
+                print_job_line(job)
+        if len(Taskman.jobs) > MAX_LINES:
+            total_not_shown = MAX_LINES - len(Taskman.jobs)
+            print('[ ... {} tasks not shown - {} waiting tasks in total ... ]'.format(total_not_shown,
+                                                                                      len(waiting_tasks)))
+            
 
     @staticmethod
     def update(resume_incomplete_tasks=True):
