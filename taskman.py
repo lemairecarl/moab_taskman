@@ -356,7 +356,7 @@ class Taskman(object):
             for job in list(sorted(waiting_tasks, key=lambda x: x.name))[:MAX_LINES - len(non_waiting_tasks)]:
                 print_job_line(job)
         if len(Taskman.jobs) > MAX_LINES:
-            total_not_shown = MAX_LINES - len(Taskman.jobs)
+            total_not_shown = len(Taskman.jobs) - MAX_LINES
             print('[ ... {} tasks not shown - {} waiting tasks in total ... ]'.format(total_not_shown,
                                                                                       len(waiting_tasks)))
             
