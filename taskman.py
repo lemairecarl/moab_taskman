@@ -75,6 +75,7 @@ class Job(object):
 class Taskman(object):
     jobs = {}
     columns = set()
+    jobid_nchars = 7
 
     @staticmethod
     def get_cmd_output(args, timeout=20):
@@ -254,6 +255,7 @@ class Taskman(object):
         for task_id, fields in sorted(started_tasks.items(), key=lambda x: x[1][0]):
             name, moab_id, template_file, args_str = fields
             j = Job(task_id, name, moab_id, None, template_file, args_str)
+            Taskman.jobid_nchars = max(Taskman.jobid_nchars, len(moab_id))
 
             if moab_id in dead_tasks:
                 j.status = JobStatus.Dead
@@ -322,7 +324,7 @@ class Taskman(object):
         print('\033[97;45m( Experiment Manager )\033[0m     ' + time.strftime("%H:%M:%S"), end='')
         print('     \033[37mCtrl+C to enter command mode\033[0m')
 
-        line_fmt = '{:<8} {:<30} {:<21} {:<7} {:<7}' + ' {:<12}' * len(Taskman.columns)
+        line_fmt = '{:<8} {:<30} {:<21} {:<' + str(Taskman.jobid_nchars) + '} {:<7}' + ' {:<12}' * len(Taskman.columns)
         print('\033[1m' + line_fmt.format('Status', 'Task name', 'Task id', 'Moab id', 'Updated',
                                           *sorted(Taskman.columns)) + '\033[0m')
         
