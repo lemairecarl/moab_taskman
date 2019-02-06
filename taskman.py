@@ -526,6 +526,8 @@ def regen_script(task_name):
 
 def short_str(x, l):
     """Shorten string from the center"""
+    if len(x) <= l:
+        return x
     left_side = math.floor((l - 2) / 2)
     right_side = (l - 2) - left_side
     return x[:left_side] + '..' + x[-right_side:]
