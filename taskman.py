@@ -250,7 +250,7 @@ class Taskman(object):
         if BUCKET_FOLDER is None:
             return
 
-        for f in glob(BUCKET_FOLDER):
+        for f in glob(BUCKET_FOLDER + '/*'):
             filepath = Path(f)
             lines = filepath.read_text().strip().split('\n')
             for l in lines:
