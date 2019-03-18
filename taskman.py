@@ -1,3 +1,4 @@
+from glob import glob
 import json
 import subprocess
 import inspect
@@ -8,6 +9,7 @@ from datetime import datetime
 from enum import Enum
 from os import makedirs, environ as env_vars
 from os.path import expandvars
+from pathlib import Path
 
 HOMEDIR = expandvars('$HOME')
 DB_STARTED_TASKS = HOMEDIR + '/taskman/started'
@@ -15,6 +17,7 @@ SCRIPTS_FOLDER = env_vars.get('TASKMAN_SCRIPTS', HOMEDIR + '/script_moab')  # Di
 CKPT_FOLDER = env_vars['TASKMAN_CKPTS']
 SLURM_MODE = 'TASKMAN_USE_SLURM' in env_vars
 MAX_LINES = env_vars.get('TASKMAN_MAXLINES', 30)
+BUCKET_FOLDER = env_vars.get('TASKMAN_BUCKET', None)
 
 
 def fmt_time(seconds):
@@ -243,6 +246,18 @@ class Taskman(object):
         return started_tasks, dead_tasks, finished_tasks
 
     @staticmethod
+    def process_bucket():
+        if BUCKET_FOLDER is None:
+            return
+
+        for f in glob(BUCKET_FOLDER):
+            filepath = Path(f)
+            lines = filepath.read_text().strip().split('\n')
+            for l in lines:
+                submit(*l.split(';'))
+            filepath.unlink()
+
+    @staticmethod
     def update_job_list():
         statuses = Taskman.get_queue()
 
@@ -365,6 +380,7 @@ class Taskman(object):
 
     @staticmethod
     def update(resume_incomplete_tasks=True):
+        Taskman.process_bucket()
         Taskman.update_job_list()
         Taskman.show_status()
         if resume_incomplete_tasks:
